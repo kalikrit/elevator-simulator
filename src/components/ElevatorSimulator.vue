@@ -2,13 +2,11 @@
   <div class="building">
     <h1>🏢 Симулятор лифтов</h1>
 
-    <!-- Верхняя панель статистики -->
     <div class="stats-bar">
       <div class="stat-item">Всего поездок: {{ trips.length }}</div>
       <div class="stat-item">Активных лифтов: {{ activeElevatorsCount }}</div>
     </div>
 
-    <!-- Этажи -->
     <div class="floors">
       <div
         v-for="floor in floors"
@@ -16,8 +14,6 @@
         class="floor"
       >
         <div class="floor-number">{{ floor + 1 }}</div>
-
-        <!-- 4 шахты (колонки) для каждого лифта -->
         <div class="elevator-shafts">
           <div
             v-for="(elevator, index) in elevators"
@@ -37,12 +33,9 @@
               <span class="elevator-icon">🚪</span>
               <span class="elevator-status">{{ getElevatorStatus(elevator) }}</span>
             </div>
-            <!-- Если лифта нет на этом этаже, показываем пустую шахту -->
             <div v-else class="empty-shaft"></div>
           </div>
         </div>
-
-        <!-- Кнопка вызова -->
         <div class="call-button">
           <button
             @click="handleCall(floor)"
@@ -55,7 +48,6 @@
       </div>
     </div>
 
-    <!-- Нижняя панель состояния лифтов -->
     <div class="elevator-status-list">
       <div
         v-for="elevator in elevators"
@@ -76,22 +68,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useElevatorSystem } from '../composables/useElevatorSystem';
 import type { Elevator } from '../types/elevator';
 
-const { elevators, trips, requestTrip } = useElevatorSystem();
+const { elevators, trips, requestTrip, onFloorReached } = useElevatorSystem();
 
 const FLOORS = 25;
 
 const floors = computed(() => Array.from({ length: FLOORS }, (_, i) => i));
 
-// Количество движущихся лифтов
 const activeElevatorsCount = computed(() =>
   elevators.filter(e => e.isMoving).length
 );
 
-// Статус лифта для отображения на иконке
 const getElevatorStatus = (elevator: Elevator): string => {
   if (elevator.isWaiting) return '⏳';
   if (!elevator.isMoving) return '⏹';
@@ -104,13 +94,20 @@ const getElevatorStatus = (elevator: Elevator): string => {
 // === Активные вызовы для подсветки кнопок ===
 const activeCalls = ref<Map<number, boolean>>(new Map());
 
+// Подписка на событие достижения этажа
+onMounted(() => {
+  onFloorReached((floor: number) => {
+    // Если этаж был в активных вызовах, удаляем
+    if (activeCalls.value.has(floor)) {
+      activeCalls.value.delete(floor);
+    }
+  });
+});
+
 const handleCall = (fromFloor: number) => {
   activeCalls.value.set(fromFloor, true);
   // Всегда едем на первый этаж (0)
   requestTrip(fromFloor, 0);
-  setTimeout(() => {
-    activeCalls.value.delete(fromFloor);
-  }, 10000);
 };
 
 const isCallActive = (floor: number) => {
@@ -119,6 +116,7 @@ const isCallActive = (floor: number) => {
 </script>
 
 <style scoped lang="scss">
+/* (стили остаются без изменений) */
 * {
   box-sizing: border-box;
 }
