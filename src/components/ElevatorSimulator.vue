@@ -14,6 +14,7 @@
         class="floor"
       >
         <div class="floor-number">{{ floor + 1 }}</div>
+
         <div class="elevator-shafts">
           <div
             v-for="(elevator, index) in elevators"
@@ -36,6 +37,7 @@
             <div v-else class="empty-shaft"></div>
           </div>
         </div>
+
         <div class="call-button">
           <button
             @click="handleCall(floor)"
@@ -47,28 +49,11 @@
         </div>
       </div>
     </div>
-
-    <div class="elevator-status-list">
-      <div
-        v-for="elevator in elevators"
-        :key="elevator.id"
-        class="elevator-status-item"
-      >
-        <span class="elevator-id">Лифт #{{ elevator.id + 1 }}</span>
-        <span class="elevator-position">Этаж: {{ Math.round(elevator.currentFloor) + 1 }}</span>
-        <span class="elevator-direction">
-          {{ elevator.direction === 'up' ? '⬆' : elevator.direction === 'down' ? '⬇' : '⏸' }}
-        </span>
-        <span class="elevator-queue">
-          Очередь: {{ elevator.queue.map(f => f + 1).join(' → ') || '—' }}
-        </span>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useElevatorSystem } from '../composables/useElevatorSystem';
 import type { Elevator } from '../types/elevator';
 
@@ -97,7 +82,6 @@ const activeCalls = ref<Map<number, boolean>>(new Map());
 // Подписка на событие достижения этажа
 onMounted(() => {
   onFloorReached((floor: number) => {
-    // Если этаж был в активных вызовах, удаляем
     if (activeCalls.value.has(floor)) {
       activeCalls.value.delete(floor);
     }
@@ -106,7 +90,6 @@ onMounted(() => {
 
 const handleCall = (fromFloor: number) => {
   activeCalls.value.set(fromFloor, true);
-  // Всегда едем на первый этаж (0)
   requestTrip(fromFloor, 0);
 };
 
@@ -116,7 +99,6 @@ const isCallActive = (floor: number) => {
 </script>
 
 <style scoped lang="scss">
-/* (стили остаются без изменений) */
 * {
   box-sizing: border-box;
 }
@@ -289,49 +271,6 @@ h1 {
         background: #f6ad55;
         box-shadow: 0 0 12px #f6ad55;
       }
-    }
-  }
-}
-
-.elevator-status-list {
-  margin-top: 8px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px;
-  background: #e2e8f0;
-  padding: 6px 10px;
-  border-radius: 8px;
-  flex-shrink: 0;
-  max-height: 80px;
-  overflow-y: auto;
-
-  .elevator-status-item {
-    background: white;
-    padding: 4px 8px;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    flex-wrap: wrap;
-
-    .elevator-id {
-      font-weight: bold;
-      color: #2c3e50;
-    }
-    .elevator-position {
-      color: #4a5568;
-    }
-    .elevator-direction {
-      font-size: 14px;
-    }
-    .elevator-queue {
-      color: #718096;
-      font-size: 10px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 120px;
     }
   }
 }

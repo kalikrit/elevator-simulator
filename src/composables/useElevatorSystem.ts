@@ -35,7 +35,6 @@ export function useElevatorSystem() {
       return { time: Math.abs(elevator.currentFloor - from), canPickup: false };
     }
 
-    // Разрешаем попутный подбор ТОЛЬКО для спускающихся лифтов
     if (elevator.direction === 'down' && from < elevator.currentFloor) {
       const hasLowerTarget = elevator.queue.some(target => target < from);
       if (hasLowerTarget) {
@@ -54,7 +53,6 @@ export function useElevatorSystem() {
     return { time: total, canPickup: false };
   };
 
-  // === Оценка времени всей поездки (from → to) ===
   const estimateTotalTime = (elevator: Elevator, from: number, to: number): number => {
     const pickup = estimatePickupTime(elevator, from);
     const travelFromTo = Math.abs(from - to);
@@ -64,13 +62,17 @@ export function useElevatorSystem() {
     return pickup.time + travelFromTo;
   };
 
-  // === Вспомогательная функция для вставки в отсортированную очередь ===
+  // === Вспомогательная функция для вставки в очередь с логами ===
   const addToQueueSorted = (elevator: Elevator, floor: number) => {
-    if (elevator.queue.includes(floor)) return;
+    if (elevator.queue.includes(floor)) {
+      console.log(`[QUEUE] Лифт #${elevator.id+1}: этаж ${floor+1} уже есть в очереди`);
+      return;
+    }
 
     const direction = elevator.direction;
     if (direction === 'idle' || elevator.queue.length === 0) {
       elevator.queue.push(floor);
+      console.log(`[QUEUE] Лифт #${elevator.id+1}: добавлен ${floor+1} в конец (стоял или очередь пуста)`);
       return;
     }
 
@@ -93,8 +95,10 @@ export function useElevatorSystem() {
 
     if (insertIndex !== -1) {
       elevator.queue.splice(insertIndex, 0, floor);
+      console.log(`[QUEUE] Лифт #${elevator.id+1}: вставлен ${floor+1} на позицию ${insertIndex} (направление ${direction})`);
     } else {
       elevator.queue.push(floor);
+      console.log(`[QUEUE] Лифт #${elevator.id+1}: добавлен ${floor+1} в конец (не найдена позиция)`);
     }
   };
 
@@ -111,7 +115,6 @@ export function useElevatorSystem() {
     let bestTime = Infinity;
     let bestIsPickup = false;
 
-    // 1️⃣ Сначала ищем лифт, который может подобрать попутно (только спускающиеся)
     for (const elevator of elevators) {
       const pickup = estimatePickupTime(elevator, fromFloor);
       if (pickup.canPickup) {
@@ -124,7 +127,6 @@ export function useElevatorSystem() {
       }
     }
 
-    // 2️⃣ Если попутных нет — выбираем любой лифт
     if (!bestElevator) {
       for (const elevator of elevators) {
         const totalTime = estimateTotalTime(elevator, fromFloor, toFloor);
@@ -143,22 +145,38 @@ export function useElevatorSystem() {
 
     console.log(`[REQUEST] Выбран лифт #${bestElevator.id+1}, попутный: ${bestIsPickup}`);
 
-    // 3️⃣ Добавляем этажи в очередь с сортировкой
+    // Добавляем этажи в очередь
     addToQueueSorted(bestElevator, fromFloor);
     addToQueueSorted(bestElevator, toFloor);
 
-    // Если лифт стоит, запускаем его с первой цели
-    if (!bestElevator.isMoving && !bestElevator.isWaiting && bestElevator.queue.length > 0) {
-      bestElevator.targetFloor = bestElevator.queue[0];
-      bestElevator.isMoving = true;
+    console.log(`[QUEUE] Лифт #${bestElevator.id+1} очередь после добавления: ${bestElevator.queue.map(f => f+1).join(' → ')}`);
+
+    // Всегда обновляем первую цель, если она изменилась
+    const firstTarget = bestElevator.queue[0];
+    if (bestElevator.targetFloor !== firstTarget) {
+      bestElevator.targetFloor = firstTarget;
       bestElevator.direction = bestElevator.targetFloor > bestElevator.currentFloor ? 'up' : 'down';
-      console.log(`[REQUEST] Запущен лифт #${bestElevator.id+1} к ${bestElevator.targetFloor+1}`);
-    } else if (bestElevator.isMoving && bestElevator.queue.length > 0) {
-      const firstTarget = bestElevator.queue[0];
-      if (bestElevator.targetFloor !== firstTarget) {
-        bestElevator.targetFloor = firstTarget;
-        bestElevator.direction = bestElevator.targetFloor > bestElevator.currentFloor ? 'up' : 'down';
+
+      // Если лифт был в ожидании, прерываем ожидание и запускаем движение
+      if (bestElevator.isWaiting) {
+        bestElevator.isWaiting = false;
+        bestElevator.isMoving = true;
+        bestElevator.waitTimeRemaining = 0;
+        console.log(`[REQUEST] Лифт #${bestElevator.id+1} прервал ожидание, едет к ${bestElevator.targetFloor+1}`);
+      } else if (!bestElevator.isMoving) {
+        // Если стоял, запускаем
+        bestElevator.isMoving = true;
+        console.log(`[REQUEST] Запущен лифт #${bestElevator.id+1} к ${bestElevator.targetFloor+1}`);
+      } else {
+        // Если уже движется, просто меняем цель
         console.log(`[REQUEST] Лифт #${bestElevator.id+1} переключён на ${bestElevator.targetFloor+1}`);
+      }
+    } else {
+      // Если цель не изменилась, но лифт стоял и не ждал — запускаем
+      if (!bestElevator.isMoving && !bestElevator.isWaiting) {
+        bestElevator.isMoving = true;
+        bestElevator.direction = bestElevator.targetFloor > bestElevator.currentFloor ? 'up' : 'down';
+        console.log(`[REQUEST] Запущен лифт #${bestElevator.id+1} к ${bestElevator.targetFloor+1}`);
       }
     }
 
@@ -170,7 +188,6 @@ export function useElevatorSystem() {
     const deltaSeconds = deltaMs / 1000;
 
     for (const elevator of elevators) {
-      // Обработка ожидания
       if (elevator.isWaiting) {
         elevator.waitTimeRemaining -= deltaMs;
         if (elevator.waitTimeRemaining <= 0) {
@@ -187,9 +204,7 @@ export function useElevatorSystem() {
         continue;
       }
 
-      // Если очередь пуста
       if (elevator.queue.length === 0) {
-        // Если лифт не на первом этаже, отправляем его туда
         if (elevator.currentFloor !== 0) {
           elevator.queue.push(0);
           elevator.targetFloor = 0;
@@ -208,14 +223,21 @@ export function useElevatorSystem() {
         elevator.targetFloor = elevator.queue[0];
         elevator.direction = elevator.targetFloor > elevator.currentFloor ? 'up' : 'down';
         elevator.isMoving = true;
+        console.log(`[UPDATE] Лифт #${elevator.id+1} новая цель ${elevator.targetFloor+1}`);
       }
 
-      // Движение к цели
+      // Движение
       if (elevator.currentFloor < elevator.targetFloor) {
         elevator.currentFloor += SPEED * deltaSeconds;
         if (elevator.currentFloor >= elevator.targetFloor) {
           elevator.currentFloor = elevator.targetFloor;
-          elevator.queue.shift();
+          const removed = elevator.queue.shift();
+          while (elevator.queue.includes(removed)) {
+            const index = elevator.queue.indexOf(removed);
+            elevator.queue.splice(index, 1);
+            console.log(`[QUEUE] Лифт #${elevator.id+1}: удалён дубликат ${removed+1} из очереди`);
+          }
+          console.log(`[QUEUE] Лифт #${elevator.id+1}: удалён ${removed+1} из очереди, осталось: ${elevator.queue.map(f => f+1).join(' → ') || 'пусто'}`);
           const reachedFloor = elevator.currentFloor;
           console.log(`[UPDATE] Лифт #${elevator.id+1} достиг ${reachedFloor+1}`);
           floorReachedCallbacks.forEach(cb => cb(reachedFloor));
@@ -237,7 +259,13 @@ export function useElevatorSystem() {
         elevator.currentFloor -= SPEED * deltaSeconds;
         if (elevator.currentFloor <= elevator.targetFloor) {
           elevator.currentFloor = elevator.targetFloor;
-          elevator.queue.shift();
+          const removed = elevator.queue.shift();
+          while (elevator.queue.includes(removed)) {
+            const index = elevator.queue.indexOf(removed);
+            elevator.queue.splice(index, 1);
+            console.log(`[QUEUE] Лифт #${elevator.id+1}: удалён дубликат ${removed+1} из очереди`);
+          }
+          console.log(`[QUEUE] Лифт #${elevator.id+1}: удалён ${removed+1} из очереди, осталось: ${elevator.queue.map(f => f+1).join(' → ') || 'пусто'}`);
           const reachedFloor = elevator.currentFloor;
           console.log(`[UPDATE] Лифт #${elevator.id+1} достиг ${reachedFloor+1}`);
           floorReachedCallbacks.forEach(cb => cb(reachedFloor));
