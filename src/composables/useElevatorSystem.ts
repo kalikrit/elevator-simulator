@@ -36,13 +36,6 @@ export function useElevatorSystem() {
       return { time: Math.abs(elevator.currentFloor - from), canPickup: false };
     }
 
-    if (elevator.direction === 'up' && from > elevator.currentFloor) {
-      const hasHigherTarget = elevator.queue.some(target => target > from);
-      if (hasHigherTarget) {
-        return { time: Math.abs(elevator.currentFloor - from), canPickup: true };
-      }
-    }
-
     if (elevator.direction === 'down' && from < elevator.currentFloor) {
       const hasLowerTarget = elevator.queue.some(target => target < from);
       if (hasLowerTarget) {
