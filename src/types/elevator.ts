@@ -5,17 +5,18 @@ export type Direction = 'up' | 'down' | 'idle';
 export interface Elevator {
   id: number;
   currentFloor: number;
-  targetFloor: number | null; // первая цель из очереди (для совместимости)
+  targetFloor: number | null;
   direction: Direction;
   isMoving: boolean;
   passengers: number;
-  queue: number[]; // все цели в порядке посещения
+  queue: number[];
+  isWaiting: boolean;          // флаг ожидания
+  waitTimeRemaining: number;   // оставшееся время ожидания в мс
 }
 
-export interface Call {
-  floor: number;             // откуда вызывают
-  direction: Direction;      // куда ехать (up/down)
-  timestamp: number;         // время вызова (для статистики)
+// Поездка: вызов с указанием этажа назначения
+export interface Trip {
+  from: number;      // этаж, где вызвали лифт
+  to: number;        // этаж назначения
+  timestamp: number; // время вызова
 }
-
-export type Floor = number;  // 0..24

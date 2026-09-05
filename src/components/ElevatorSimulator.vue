@@ -2,11 +2,28 @@
   <div class="building">
     <h1>🏢 Симулятор лифтов</h1>
 
-    <div class="stats-bar">
-      <div class="stat-item">Всего вызовов: {{ calls.length }}</div>
-      <div class="stat-item">Активные лифты: {{ activeElevatorsCount }}</div>
+    <!-- Верхняя панель с управлением -->
+    <div class="controls">
+      <div class="control-group">
+        <label for="destination">Куда едем?</label>
+        <input
+          id="destination"
+          type="number"
+          v-model.number="destinationTo"
+          :min="1"
+          :max="FLOORS"
+          placeholder="Этаж"
+          class="dest-input"
+        />
+        <span class="hint">от 1 до {{ FLOORS }}</span>
+      </div>
+      <div class="stats">
+        <span>Всего поездок: {{ trips.length }}</span>
+        <span>Активных лифтов: {{ activeElevatorsCount }}</span>
+      </div>
     </div>
 
+    <!-- Этажи -->
     <div class="floors">
       <div
         v-for="floor in floors"
@@ -15,6 +32,7 @@
         :style="{ height: floorHeight + 'px' }"
       >
         <div class="floor-number">{{ floor + 1 }}</div>
+
         <div class="elevator-shaft">
           <div
             v-for="elevator in elevatorsOnFloor(floor)"
@@ -30,27 +48,22 @@
             <span class="elevator-status">{{ getElevatorStatus(elevator) }}</span>
           </div>
         </div>
-        <div class="call-buttons">
+
+        <!-- Кнопка вызова с указанием назначения -->
+        <div class="call-button">
           <button
-            v-if="floor < floors.length - 1"
-            @click="handleCall(floor, 'up')"
-            class="btn-up"
-            :class="{ active: isCallActive(floor, 'up') }"
+            @click="handleCall(floor)"
+            class="btn-call"
+            :class="{ active: isCallActive(floor) }"
+            :disabled="!isValidDestination"
           >
-            ▲
-          </button>
-          <button
-            v-if="floor > 0"
-            @click="handleCall(floor, 'down')"
-            class="btn-down"
-            :class="{ active: isCallActive(floor, 'down') }"
-          >
-            ▼
+            🛗 Вызвать
           </button>
         </div>
       </div>
     </div>
 
+    <!-- Нижняя панель состояния лифтов -->
     <div class="elevator-status-list">
       <div
         v-for="elevator in elevators"
@@ -73,23 +86,35 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useElevatorSystem } from '../composables/useElevatorSystem';
-import type { Elevator, Direction } from '../types/elevator';
+import type { Elevator } from '../types/elevator';
 
-const { elevators, calls, callElevator } = useElevatorSystem();
+const { elevators, trips, requestTrip } = useElevatorSystem();
 
 const FLOORS = 25;
 const floorHeight = 60;
 
 const floors = computed(() => Array.from({ length: FLOORS }, (_, i) => i));
 
+const destinationTo = ref<number>(1); // по умолчанию 1-й этаж
+
+// Проверка валидности введённого этажа
+const isValidDestination = computed(() => {
+  return destinationTo.value >= 1 && destinationTo.value <= FLOORS;
+});
+
+// Лифты на конкретном этаже (с округлением)
 const elevatorsOnFloor = (floor: number) => {
-  return elevators.filter(e => Math.round(e.currentFloor) === floor);
+  return elevators.filter(
+    (e) => Math.round(e.currentFloor) === floor
+  );
 };
 
+// Количество движущихся лифтов
 const activeElevatorsCount = computed(() =>
   elevators.filter(e => e.isMoving).length
 );
 
+// Статус лифта для отображения на иконке
 const getElevatorStatus = (elevator: Elevator): string => {
   if (!elevator.isMoving) return '⏹';
   if (elevator.targetFloor !== null) {
@@ -98,23 +123,31 @@ const getElevatorStatus = (elevator: Elevator): string => {
   return '⏳';
 };
 
-// === Подсветка активных вызовов ===
-const activeCalls = ref<Map<number, Direction>>(new Map());
+// === Активные вызовы для подсветки кнопок ===
+const activeCalls = ref<Map<number, boolean>>(new Map());
 
-const handleCall = (floor: number, direction: Direction) => {
+const handleCall = (fromFloor: number) => {
+  if (!isValidDestination.value) return;
+  const toFloor = destinationTo.value - 1; // переводим в 0-индексацию
+  if (fromFloor === toFloor) {
+    alert('Начальный и конечный этажи совпадают!');
+    return;
+  }
+
   // Добавляем в активные вызовы (для подсветки)
-  activeCalls.value.set(floor, direction);
-  // Вызываем лифт
-  callElevator(floor, direction);
+  activeCalls.value.set(fromFloor, true);
 
-  // Снимаем подсветку через 10 секунд (или когда лифт приедет — логика может быть сложнее)
+  // Вызываем лифт с указанием назначения
+  requestTrip(fromFloor, toFloor);
+
+  // Снимаем подсветку через 10 секунд (можно доработать, чтобы снималась после прибытия)
   setTimeout(() => {
-    activeCalls.value.delete(floor);
+    activeCalls.value.delete(fromFloor);
   }, 10000);
 };
 
-const isCallActive = (floor: number, direction: Direction) => {
-  return activeCalls.value.get(floor) === direction;
+const isCallActive = (floor: number) => {
+  return activeCalls.value.get(floor) === true;
 };
 </script>
 
@@ -129,22 +162,55 @@ const isCallActive = (floor: number, direction: Direction) => {
 
   h1 {
     text-align: center;
-    margin-bottom: 10px;
+    margin-bottom: 15px;
     color: #2c3e50;
   }
 
-  .stats-bar {
+  .controls {
     display: flex;
-    justify-content: center;
-    gap: 30px;
-    margin-bottom: 15px;
+    justify-content: space-between;
+    align-items: center;
     background: #e2e8f0;
-    padding: 8px 16px;
+    padding: 10px 16px;
     border-radius: 8px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+    gap: 10px;
 
-    .stat-item {
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      label {
+        font-weight: 600;
+        color: #2d3748;
+      }
+
+      .dest-input {
+        width: 60px;
+        padding: 6px 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+        text-align: center;
+        outline: none;
+        &:focus {
+          border-color: #4299e1;
+        }
+      }
+
+      .hint {
+        font-size: 12px;
+        color: #718096;
+      }
+    }
+
+    .stats {
+      display: flex;
+      gap: 20px;
       font-size: 14px;
-      font-weight: 600;
+      font-weight: 500;
       color: #2d3748;
     }
   }
@@ -238,52 +304,33 @@ const isCallActive = (floor: number, direction: Direction) => {
       }
     }
 
-    .call-buttons {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
+    .call-button {
       margin-left: 8px;
-
-      button {
+      .btn-call {
         border: none;
-        background: #cbd5e0;
-        color: #2d3748;
-        width: 28px;
-        height: 22px;
+        background: #48bb78;
+        color: white;
+        padding: 4px 10px;
         border-radius: 4px;
-        font-size: 14px;
+        font-size: 12px;
         cursor: pointer;
         transition: background 0.2s, transform 0.1s;
+        white-space: nowrap;
 
-        &:hover {
+        &:hover:not(:disabled) {
+          background: #38a169;
+        }
+        &:active:not(:disabled) {
+          transform: scale(0.95);
+        }
+        &:disabled {
           background: #a0aec0;
+          cursor: not-allowed;
+          opacity: 0.6;
         }
-        &:active {
-          transform: scale(0.9);
-        }
-
-        &.btn-up {
-          background: #48bb78;
-          color: white;
-          &:hover {
-            background: #38a169;
-          }
-          &.active {
-            background: #f6ad55;
-            box-shadow: 0 0 12px #f6ad55;
-          }
-        }
-
-        &.btn-down {
-          background: #ed8936;
-          color: white;
-          &:hover {
-            background: #dd6b20;
-          }
-          &.active {
-            background: #f6ad55;
-            box-shadow: 0 0 12px #f6ad55;
-          }
+        &.active {
+          background: #f6ad55;
+          box-shadow: 0 0 12px #f6ad55;
         }
       }
     }

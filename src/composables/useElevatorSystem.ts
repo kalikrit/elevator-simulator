@@ -1,11 +1,12 @@
 // src/composables/useElevatorSystem.ts
 
 import { reactive, onMounted, onUnmounted } from 'vue';
-import type { Elevator, Call, Direction } from '../types/elevator';
+import type { Elevator, Trip, Direction } from '../types/elevator';
 
 const FLOORS = 25;
 const ELEVATOR_COUNT = 4;
 const SPEED = 1; // этажей в секунду
+const WAIT_TIME = 5000; // 5 секунд ожидания на промежуточных остановках
 
 export function useElevatorSystem() {
   const elevators = reactive<Elevator[]>(
@@ -17,53 +18,106 @@ export function useElevatorSystem() {
       isMoving: false,
       passengers: 0,
       queue: [],
+      isWaiting: false,
+      waitTimeRemaining: 0,
     }))
   );
 
-  const calls = reactive<Call[]>([]);
+  const trips = reactive<Trip[]>([]);
   let intervalId: number | null = null;
+  let lastTimestamp = performance.now();
 
-  // Оценка времени прибытия (для выбора лучшего лифта)
-  const estimateArrivalTime = (elevator: Elevator, targetFloor: number): number => {
-    if (!elevator.isMoving || elevator.queue.length === 0) {
-      return Math.abs(elevator.currentFloor - targetFloor);
+  // Оценка времени всей поездки с учётом ожиданий
+  const estimateTotalTime = (elevator: Elevator, from: number, to: number): number => {
+    // Если лифт стоит и очередь пуста
+    if (!elevator.isMoving && elevator.queue.length === 0 && !elevator.isWaiting) {
+      return Math.abs(elevator.currentFloor - from) + Math.abs(from - to);
     }
-    const lastTarget = elevator.queue[elevator.queue.length - 1];
-    const distanceToLast = Math.abs(lastTarget - elevator.currentFloor);
-    const distanceToNew = Math.abs(lastTarget - targetFloor);
-    return distanceToLast + distanceToNew;
+
+    // Моделируем прохождение очереди и новой поездки
+    let current = elevator.currentFloor;
+    let total = 0;
+    // Проходим по всем целям в очереди
+    for (let i = 0; i < elevator.queue.length; i++) {
+      const target = elevator.queue[i];
+      total += Math.abs(current - target);
+      current = target;
+      // Если это не последняя цель в очереди, добавляем время ожидания
+      if (i < elevator.queue.length - 1) {
+        total += WAIT_TIME / 1000; // переводим в секунды для оценки
+      }
+    }
+    // Добавляем поездку от последней цели до from и от from до to
+    total += Math.abs(current - from) + Math.abs(from - to);
+    // Если from не является последней целью, добавляем ожидание на from
+    // (мы всегда ждём на from, если есть to)
+    total += WAIT_TIME / 1000;
+    return total;
   };
 
-  // Вызов лифта пользователем
-  const callElevator = (floor: number, direction: Direction) => {
+  // Запрос поездки
+  const requestTrip = (fromFloor: number, toFloor: number) => {
+    if (fromFloor === toFloor) {
+      console.warn('Начальный и конечный этажи совпадают');
+      return;
+    }
+
     let bestElevator: Elevator | null = null;
     let bestTime = Infinity;
 
     for (const elevator of elevators) {
-      const estimatedTime = estimateArrivalTime(elevator, floor);
-      if (estimatedTime < bestTime) {
-        bestTime = estimatedTime;
+      const time = estimateTotalTime(elevator, fromFloor, toFloor);
+      if (time < bestTime) {
+        bestTime = time;
         bestElevator = elevator;
       }
     }
 
     if (bestElevator) {
-      if (!bestElevator.queue.includes(floor)) {
-        bestElevator.queue.push(floor);
+      // Добавляем в очередь оба этажа, если их там ещё нет
+      if (!bestElevator.queue.includes(fromFloor)) {
+        bestElevator.queue.push(fromFloor);
       }
-      if (!bestElevator.isMoving && bestElevator.queue.length > 0) {
+      if (!bestElevator.queue.includes(toFloor)) {
+        bestElevator.queue.push(toFloor);
+      }
+
+      // Если лифт стоял и не ждёт, запускаем его
+      if (!bestElevator.isMoving && !bestElevator.isWaiting && bestElevator.queue.length > 0) {
         bestElevator.targetFloor = bestElevator.queue[0];
         bestElevator.isMoving = true;
         bestElevator.direction = bestElevator.targetFloor > bestElevator.currentFloor ? 'up' : 'down';
       }
     }
 
-    calls.push({ floor, direction, timestamp: Date.now() });
+    trips.push({ from: fromFloor, to: toFloor, timestamp: Date.now() });
   };
 
   // Обновление состояния лифтов (тик)
-  const updateElevators = () => {
+  const updateElevators = (deltaMs: number) => {
+    const deltaSeconds = deltaMs / 1000;
+
     for (const elevator of elevators) {
+      // === Обработка ожидания ===
+      if (elevator.isWaiting) {
+        elevator.waitTimeRemaining -= deltaMs;
+        if (elevator.waitTimeRemaining <= 0) {
+          // Выходим из ожидания: удаляем выполненную цель
+          elevator.queue.shift();
+          elevator.targetFloor = elevator.queue[0] || null;
+          elevator.isWaiting = false;
+          elevator.isMoving = true;
+          if (elevator.targetFloor !== null) {
+            elevator.direction = elevator.targetFloor > elevator.currentFloor ? 'up' : 'down';
+          } else {
+            elevator.isMoving = false;
+            elevator.direction = 'idle';
+          }
+        }
+        continue; // пока ждём, не двигаемся
+      }
+
+      // === Если очередь пуста ===
       if (elevator.queue.length === 0) {
         elevator.isMoving = false;
         elevator.direction = 'idle';
@@ -71,42 +125,48 @@ export function useElevatorSystem() {
         continue;
       }
 
+      // === Если нет текущей цели ===
       if (elevator.targetFloor === null) {
         elevator.targetFloor = elevator.queue[0];
         elevator.direction = elevator.targetFloor > elevator.currentFloor ? 'up' : 'down';
         elevator.isMoving = true;
       }
 
+      // === Движение к цели ===
       if (elevator.currentFloor < elevator.targetFloor) {
-        elevator.currentFloor += SPEED;
+        elevator.currentFloor += SPEED * deltaSeconds;
         elevator.direction = 'up';
         if (elevator.currentFloor >= elevator.targetFloor) {
           elevator.currentFloor = elevator.targetFloor;
-          elevator.queue.shift();
-          elevator.targetFloor = elevator.queue[0] || null;
-          if (elevator.targetFloor === null) {
+          // Достигли цели
+          if (elevator.queue.length > 1) {
+            // Если есть ещё цели — начинаем ожидание
+            elevator.isWaiting = true;
+            elevator.waitTimeRemaining = WAIT_TIME;
+            elevator.isMoving = false;
+          } else {
+            // Если это последняя цель — удаляем и останавливаемся
+            elevator.queue.shift();
+            elevator.targetFloor = null;
             elevator.isMoving = false;
             elevator.direction = 'idle';
           }
         }
       } else if (elevator.currentFloor > elevator.targetFloor) {
-        elevator.currentFloor -= SPEED;
+        elevator.currentFloor -= SPEED * deltaSeconds;
         elevator.direction = 'down';
         if (elevator.currentFloor <= elevator.targetFloor) {
           elevator.currentFloor = elevator.targetFloor;
-          elevator.queue.shift();
-          elevator.targetFloor = elevator.queue[0] || null;
-          if (elevator.targetFloor === null) {
+          if (elevator.queue.length > 1) {
+            elevator.isWaiting = true;
+            elevator.waitTimeRemaining = WAIT_TIME;
+            elevator.isMoving = false;
+          } else {
+            elevator.queue.shift();
+            elevator.targetFloor = null;
             elevator.isMoving = false;
             elevator.direction = 'idle';
           }
-        }
-      } else {
-        elevator.queue.shift();
-        elevator.targetFloor = elevator.queue[0] || null;
-        if (elevator.targetFloor === null) {
-          elevator.isMoving = false;
-          elevator.direction = 'idle';
         }
       }
     }
@@ -114,7 +174,13 @@ export function useElevatorSystem() {
 
   const startSimulation = () => {
     if (intervalId) return;
-    intervalId = setInterval(updateElevators, 1000 / 60);
+    lastTimestamp = performance.now();
+    intervalId = setInterval(() => {
+      const now = performance.now();
+      const deltaMs = now - lastTimestamp;
+      lastTimestamp = now;
+      updateElevators(deltaMs);
+    }, 1000 / 60);
   };
 
   const stopSimulation = () => {
@@ -132,5 +198,5 @@ export function useElevatorSystem() {
     stopSimulation();
   });
 
-  return { elevators, calls, callElevator };
+  return { elevators, trips, requestTrip };
 }
