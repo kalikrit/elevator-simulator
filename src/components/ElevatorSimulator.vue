@@ -2,10 +2,10 @@
   <div class="building">
     <h1>🏢 Симулятор лифтов</h1>
 
-    <!-- Верхняя панель со статистикой -->
+    <!-- Верхняя панель статистики -->
     <div class="stats-bar">
-      <span>Всего поездок: {{ trips.length }}</span>
-      <span>Активных лифтов: {{ activeElevatorsCount }}</span>
+      <div class="stat-item">Всего поездок: {{ trips.length }}</div>
+      <div class="stat-item">Активных лифтов: {{ activeElevatorsCount }}</div>
     </div>
 
     <!-- Этажи -->
@@ -14,23 +14,31 @@
         v-for="floor in floors"
         :key="floor"
         class="floor"
-        :style="{ height: floorHeight + 'px' }"
       >
         <div class="floor-number">{{ floor + 1 }}</div>
 
-        <div class="elevator-shaft">
+        <!-- 4 шахты (колонки) для каждого лифта -->
+        <div class="elevator-shafts">
           <div
-            v-for="elevator in elevatorsOnFloor(floor)"
-            :key="elevator.id"
-            class="elevator"
-            :class="{
-              'elevator-moving': elevator.isMoving,
-              'elevator-up': elevator.direction === 'up',
-              'elevator-down': elevator.direction === 'down',
-            }"
+            v-for="(elevator, index) in elevators"
+            :key="index"
+            class="shaft"
           >
-            <span class="elevator-icon">🚪</span>
-            <span class="elevator-status">{{ getElevatorStatus(elevator) }}</span>
+            <div
+              v-if="Math.round(elevator.currentFloor) === floor"
+              class="elevator"
+              :class="{
+                'elevator-moving': elevator.isMoving,
+                'elevator-up': elevator.direction === 'up',
+                'elevator-down': elevator.direction === 'down',
+                'elevator-waiting': elevator.isWaiting,
+              }"
+            >
+              <span class="elevator-icon">🚪</span>
+              <span class="elevator-status">{{ getElevatorStatus(elevator) }}</span>
+            </div>
+            <!-- Если лифта нет на этом этаже, показываем пустую шахту -->
+            <div v-else class="empty-shaft"></div>
           </div>
         </div>
 
@@ -75,22 +83,17 @@ import type { Elevator } from '../types/elevator';
 const { elevators, trips, requestTrip } = useElevatorSystem();
 
 const FLOORS = 25;
-const floorHeight = 30; // уменьшили высоту этажа
 
 const floors = computed(() => Array.from({ length: FLOORS }, (_, i) => i));
 
-// Лифты на этаже
-const elevatorsOnFloor = (floor: number) => {
-  return elevators.filter(
-    (e) => Math.round(e.currentFloor) === floor
-  );
-};
-
+// Количество движущихся лифтов
 const activeElevatorsCount = computed(() =>
   elevators.filter(e => e.isMoving).length
 );
 
+// Статус лифта для отображения на иконке
 const getElevatorStatus = (elevator: Elevator): string => {
+  if (elevator.isWaiting) return '⏳';
   if (!elevator.isMoving) return '⏹';
   if (elevator.targetFloor !== null) {
     return `⬆ ${elevator.targetFloor + 1}`;
@@ -98,20 +101,13 @@ const getElevatorStatus = (elevator: Elevator): string => {
   return '⏳';
 };
 
-// Активные вызовы для подсветки кнопок
+// === Активные вызовы для подсветки кнопок ===
 const activeCalls = ref<Map<number, boolean>>(new Map());
 
-// Обработчик вызова (всегда на первый этаж)
 const handleCall = (fromFloor: number) => {
-  const toFloor = 0; // всегда первый этаж
-  if (fromFloor === toFloor) {
-    alert('Вы уже на первом этаже!');
-    return;
-  }
-
   activeCalls.value.set(fromFloor, true);
-  requestTrip(fromFloor, toFloor);
-
+  // Всегда едем на первый этаж (0)
+  requestTrip(fromFloor, 0);
   setTimeout(() => {
     activeCalls.value.delete(fromFloor);
   }, 10000);
@@ -123,202 +119,228 @@ const isCallActive = (floor: number) => {
 </script>
 
 <style scoped lang="scss">
+* {
+  box-sizing: border-box;
+}
+
 .building {
-  max-width: 700px;
+  max-width: 800px;
   margin: 10px auto;
-  padding: 10px;
+  padding: 10px 15px;
   background: #f0f4f8;
   border-radius: 16px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  width: 100%;
-  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: 98vh;
+  max-height: 100vh;
+  overflow: hidden;
+}
 
-  h1 {
-    text-align: center;
-    margin-bottom: 5px;
-    color: #2c3e50;
-    font-size: 20px;
-  }
+h1 {
+  text-align: center;
+  margin: 0 0 8px 0;
+  font-size: 1.5rem;
+  color: #2c3e50;
+  flex-shrink: 0;
+}
 
-  .stats-bar {
-    display: flex;
-    justify-content: center;
-    gap: 30px;
-    margin-bottom: 10px;
-    background: #e2e8f0;
-    padding: 6px 12px;
-    border-radius: 8px;
+.stats-bar {
+  display: flex;
+  justify-content: center;
+  gap: 30px;
+  margin-bottom: 8px;
+  background: #e2e8f0;
+  padding: 6px 16px;
+  border-radius: 8px;
+  flex-shrink: 0;
+
+  .stat-item {
     font-size: 14px;
     font-weight: 600;
     color: #2d3748;
   }
+}
 
-  .floors {
-    display: flex;
-    flex-direction: column-reverse;
-    gap: 2px;
-    background: #e2e8f0;
-    padding: 6px;
-    border-radius: 8px;
-    max-height: calc(25 * 30px + 20px); // 25 этажей * 30px + отступы
-    overflow: hidden; // убрали прокрутку
+.floors {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: 4px 0;
+}
+
+.floor {
+  display: flex;
+  align-items: center;
+  background: white;
+  padding: 0 8px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  min-height: 28px;
+  height: calc((100% - 2px * 24) / 25);
+  flex-shrink: 0;
+
+  .floor-number {
+    width: 30px;
+    font-weight: bold;
+    color: #4a5568;
+    font-size: 12px;
+    flex-shrink: 0;
   }
 
-  .floor {
+  .elevator-shafts {
+    flex: 1;
+    display: flex;
+    gap: 4px;
+    justify-content: space-around;
+    padding: 2px 0;
+    min-height: 24px;
+  }
+
+  .shaft {
+    flex: 1;
+    min-width: 30px;
+    background: #e2e8f0;
+    border-radius: 3px;
     display: flex;
     align-items: center;
-    background: white;
-    padding: 0 6px;
+    justify-content: center;
+    position: relative;
+    min-height: 24px;
+  }
+
+  .elevator {
+    width: 90%;
+    height: 80%;
+    background: #718096;
     border-radius: 4px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-    transition: background 0.2s;
-    min-height: 28px;
-    height: 28px; // фиксированная высота для компактности
-    width: 100%; // чтобы не дергалось
-    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0 4px;
+    transition: background 0.3s;
 
-    &:hover {
-      background: #f7fafc;
+    .elevator-icon {
+      font-size: 14px;
+      line-height: 1;
+    }
+    .elevator-status {
+      font-size: 8px;
+      color: white;
+      background: rgba(0,0,0,0.3);
+      padding: 1px 3px;
+      border-radius: 3px;
+      white-space: nowrap;
     }
 
-    .floor-number {
+    &.elevator-moving {
+      background: #4299e1;
+      box-shadow: 0 0 6px rgba(66, 153, 225, 0.4);
+    }
+    &.elevator-up {
+      background: #48bb78;
+    }
+    &.elevator-down {
+      background: #ed8936;
+    }
+    &.elevator-waiting {
+      background: #f6ad55;
+      animation: pulse 1s infinite;
+    }
+  }
+
+  .empty-shaft {
+    width: 90%;
+    height: 80%;
+    background: transparent;
+    border: 1px dashed #cbd5e0;
+    border-radius: 4px;
+  }
+
+  .call-button {
+    margin-left: 8px;
+    flex-shrink: 0;
+    width: 32px;
+    display: flex;
+    justify-content: center;
+
+    .btn-call {
+      border: none;
+      background: #48bb78;
+      color: white;
       width: 28px;
-      font-weight: bold;
-      color: #4a5568;
-      font-size: 12px;
-      flex-shrink: 0;
-    }
-
-    .elevator-shaft {
-      flex: 1;
+      height: 28px;
+      border-radius: 50%;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
       display: flex;
-      gap: 8px;
+      align-items: center;
       justify-content: center;
-      padding: 2px 0;
-      min-height: 26px;
-    }
+      padding: 0;
 
-    .elevator {
-      width: 36px;
-      height: 26px;
-      background: #718096;
-      border-radius: 4px;
-      display: flex;
-      align-items: center;
-      justify-content: space-around;
-      padding: 0 4px;
-      transition: background 0.3s, transform 0.2s;
-      position: relative;
-
-      .elevator-icon {
-        font-size: 14px;
-        line-height: 1;
+      &:hover {
+        background: #38a169;
       }
-
-      .elevator-status {
-        font-size: 8px;
-        color: white;
-        background: rgba(0,0,0,0.3);
-        padding: 1px 3px;
-        border-radius: 3px;
-        white-space: nowrap;
+      &:active {
+        transform: scale(0.9);
       }
-
-      &.elevator-moving {
-        background: #4299e1;
-        box-shadow: 0 0 6px rgba(66, 153, 225, 0.5);
-      }
-
-      &.elevator-up {
-        background: #48bb78;
-        .elevator-icon::after {
-          content: ' ▲';
-          font-size: 8px;
-        }
-      }
-
-      &.elevator-down {
-        background: #ed8936;
-        .elevator-icon::after {
-          content: ' ▼';
-          font-size: 8px;
-        }
-      }
-    }
-
-    .call-button {
-      margin-left: 4px;
-      flex-shrink: 0;
-      .btn-call {
-        border: none;
-        background: #48bb78;
-        color: white;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 14px;
-        cursor: pointer;
-        transition: background 0.2s, transform 0.1s;
-        line-height: 1.2;
-        min-width: 28px;
-        text-align: center;
-
-        &:hover:not(:disabled) {
-          background: #38a169;
-        }
-        &:active:not(:disabled) {
-          transform: scale(0.9);
-        }
-        &:disabled {
-          background: #a0aec0;
-          cursor: not-allowed;
-          opacity: 0.6;
-        }
-        &.active {
-          background: #f6ad55;
-          box-shadow: 0 0 8px #f6ad55;
-        }
+      &.active {
+        background: #f6ad55;
+        box-shadow: 0 0 12px #f6ad55;
       }
     }
   }
+}
 
-  .elevator-status-list {
-    margin-top: 10px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
-    background: #e2e8f0;
-    padding: 6px;
-    border-radius: 8px;
+.elevator-status-list {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  background: #e2e8f0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  max-height: 80px;
+  overflow-y: auto;
 
-    .elevator-status-item {
-      background: white;
-      padding: 4px 8px;
-      border-radius: 4px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      flex-wrap: wrap;
+  .elevator-status-item {
+    background: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    flex-wrap: wrap;
 
-      .elevator-id {
-        font-weight: bold;
-        color: #2c3e50;
-      }
-      .elevator-position {
-        color: #4a5568;
-      }
-      .elevator-direction {
-        font-size: 14px;
-      }
-      .elevator-queue {
-        color: #718096;
-        font-size: 10px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        max-width: 120px;
-      }
+    .elevator-id {
+      font-weight: bold;
+      color: #2c3e50;
+    }
+    .elevator-position {
+      color: #4a5568;
+    }
+    .elevator-direction {
+      font-size: 14px;
+    }
+    .elevator-queue {
+      color: #718096;
+      font-size: 10px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 120px;
     }
   }
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
 }
 </style>
