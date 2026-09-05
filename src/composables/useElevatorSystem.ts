@@ -8,7 +8,6 @@ const ELEVATOR_COUNT = 4;
 const SPEED = 1;
 const WAIT_TIME = 5000;
 
-// Массив колбэков для событий достижения этажа
 const floorReachedCallbacks: ((floor: number) => void)[] = [];
 
 export function useElevatorSystem() {
@@ -36,6 +35,7 @@ export function useElevatorSystem() {
       return { time: Math.abs(elevator.currentFloor - from), canPickup: false };
     }
 
+    // Разрешаем попутный подбор ТОЛЬКО для спускающихся лифтов
     if (elevator.direction === 'down' && from < elevator.currentFloor) {
       const hasLowerTarget = elevator.queue.some(target => target < from);
       if (hasLowerTarget) {
@@ -64,18 +64,54 @@ export function useElevatorSystem() {
     return pickup.time + travelFromTo;
   };
 
-  // === Запрос поездки с приоритетом попутного подбора ===
+  // === Вспомогательная функция для вставки в отсортированную очередь ===
+  const addToQueueSorted = (elevator: Elevator, floor: number) => {
+    if (elevator.queue.includes(floor)) return;
+
+    const direction = elevator.direction;
+    if (direction === 'idle' || elevator.queue.length === 0) {
+      elevator.queue.push(floor);
+      return;
+    }
+
+    let insertIndex = -1;
+    if (direction === 'up') {
+      for (let i = 0; i < elevator.queue.length; i++) {
+        if (elevator.queue[i] > floor) {
+          insertIndex = i;
+          break;
+        }
+      }
+    } else if (direction === 'down') {
+      for (let i = 0; i < elevator.queue.length; i++) {
+        if (elevator.queue[i] < floor) {
+          insertIndex = i;
+          break;
+        }
+      }
+    }
+
+    if (insertIndex !== -1) {
+      elevator.queue.splice(insertIndex, 0, floor);
+    } else {
+      elevator.queue.push(floor);
+    }
+  };
+
+  // === Запрос поездки ===
   const requestTrip = (fromFloor: number, toFloor: number) => {
     if (fromFloor === toFloor) {
       console.warn('Начальный и конечный этажи совпадают');
       return;
     }
 
+    console.log(`[REQUEST] Вызов с ${fromFloor+1} на ${toFloor+1}`);
+
     let bestElevator: Elevator | null = null;
     let bestTime = Infinity;
     let bestIsPickup = false;
 
-    // 1️⃣ Сначала ищем лифт, который может подобрать попутно
+    // 1️⃣ Сначала ищем лифт, который может подобрать попутно (только спускающиеся)
     for (const elevator of elevators) {
       const pickup = estimatePickupTime(elevator, fromFloor);
       if (pickup.canPickup) {
@@ -100,54 +136,30 @@ export function useElevatorSystem() {
       }
     }
 
-    if (!bestElevator) return;
-
-    // 3️⃣ Добавляем этажи в очередь и корректируем текущую цель при необходимости
-    if (bestIsPickup) {
-      const direction = bestElevator.direction;
-      let insertIndex = -1;
-      for (let i = 0; i < bestElevator.queue.length; i++) {
-        const target = bestElevator.queue[i];
-        if ((direction === 'up' && target > fromFloor) || (direction === 'down' && target < fromFloor)) {
-          insertIndex = i;
-          break;
-        }
-      }
-      if (insertIndex !== -1 && !bestElevator.queue.includes(fromFloor)) {
-        bestElevator.queue.splice(insertIndex, 0, fromFloor);
-      } else if (!bestElevator.queue.includes(fromFloor)) {
-        bestElevator.queue.push(fromFloor);
-      }
-
-      // Если лифт уже движется, проверим, можно ли обновить текущую цель
-      if (bestElevator.isMoving && bestElevator.targetFloor !== null) {
-        const currentPos = bestElevator.currentFloor;
-        const currentTarget = bestElevator.targetFloor;
-        // Проверяем, находится ли новая цель between currentPos и currentTarget (по направлению)
-        if (direction === 'down' && fromFloor < currentPos && fromFloor > currentTarget) {
-          // Новая цель ближе к currentPos, чем currentTarget
-          bestElevator.targetFloor = fromFloor;
-          bestElevator.direction = 'down';
-        } else if (direction === 'up' && fromFloor > currentPos && fromFloor < currentTarget) {
-          bestElevator.targetFloor = fromFloor;
-          bestElevator.direction = 'up';
-        }
-      }
-    } else {
-      if (!bestElevator.queue.includes(fromFloor)) {
-        bestElevator.queue.push(fromFloor);
-      }
+    if (!bestElevator) {
+      console.warn('[REQUEST] Не найден лифт');
+      return;
     }
 
-    if (!bestElevator.queue.includes(toFloor)) {
-      bestElevator.queue.push(toFloor);
-    }
+    console.log(`[REQUEST] Выбран лифт #${bestElevator.id+1}, попутный: ${bestIsPickup}`);
 
-    // Если лифт стоял, запускаем
+    // 3️⃣ Добавляем этажи в очередь с сортировкой
+    addToQueueSorted(bestElevator, fromFloor);
+    addToQueueSorted(bestElevator, toFloor);
+
+    // Если лифт стоит, запускаем его с первой цели
     if (!bestElevator.isMoving && !bestElevator.isWaiting && bestElevator.queue.length > 0) {
       bestElevator.targetFloor = bestElevator.queue[0];
       bestElevator.isMoving = true;
       bestElevator.direction = bestElevator.targetFloor > bestElevator.currentFloor ? 'up' : 'down';
+      console.log(`[REQUEST] Запущен лифт #${bestElevator.id+1} к ${bestElevator.targetFloor+1}`);
+    } else if (bestElevator.isMoving && bestElevator.queue.length > 0) {
+      const firstTarget = bestElevator.queue[0];
+      if (bestElevator.targetFloor !== firstTarget) {
+        bestElevator.targetFloor = firstTarget;
+        bestElevator.direction = bestElevator.targetFloor > bestElevator.currentFloor ? 'up' : 'down';
+        console.log(`[REQUEST] Лифт #${bestElevator.id+1} переключён на ${bestElevator.targetFloor+1}`);
+      }
     }
 
     trips.push({ from: fromFloor, to: toFloor, timestamp: Date.now() });
@@ -170,14 +182,25 @@ export function useElevatorSystem() {
             elevator.isMoving = false;
             elevator.direction = 'idle';
           }
+          console.log(`[UPDATE] Лифт #${elevator.id+1} закончил ожидание, движется к ${elevator.targetFloor !== null ? elevator.targetFloor+1 : 'никуда'}`);
         }
         continue;
       }
 
+      // Если очередь пуста
       if (elevator.queue.length === 0) {
-        elevator.isMoving = false;
-        elevator.direction = 'idle';
-        elevator.targetFloor = null;
+        // Если лифт не на первом этаже, отправляем его туда
+        if (elevator.currentFloor !== 0) {
+          elevator.queue.push(0);
+          elevator.targetFloor = 0;
+          elevator.direction = 'down';
+          elevator.isMoving = true;
+          console.log(`[UPDATE] Лифт #${elevator.id+1} возвращается на первый этаж`);
+        } else {
+          elevator.isMoving = false;
+          elevator.direction = 'idle';
+          elevator.targetFloor = null;
+        }
         continue;
       }
 
@@ -192,10 +215,9 @@ export function useElevatorSystem() {
         elevator.currentFloor += SPEED * deltaSeconds;
         if (elevator.currentFloor >= elevator.targetFloor) {
           elevator.currentFloor = elevator.targetFloor;
-          // Достигли цели
-          elevator.queue.shift(); // удаляем выполненную цель
-          // Вызываем колбэки для этого этажа
+          elevator.queue.shift();
           const reachedFloor = elevator.currentFloor;
+          console.log(`[UPDATE] Лифт #${elevator.id+1} достиг ${reachedFloor+1}`);
           floorReachedCallbacks.forEach(cb => cb(reachedFloor));
 
           if (elevator.queue.length > 0) {
@@ -203,10 +225,12 @@ export function useElevatorSystem() {
             elevator.isWaiting = true;
             elevator.waitTimeRemaining = WAIT_TIME;
             elevator.isMoving = false;
+            console.log(`[UPDATE] Лифт #${elevator.id+1} ожидает 5с, следующая цель ${elevator.targetFloor+1}`);
           } else {
             elevator.targetFloor = null;
             elevator.isMoving = false;
             elevator.direction = 'idle';
+            console.log(`[UPDATE] Лифт #${elevator.id+1} завершил все поездки`);
           }
         }
       } else if (elevator.currentFloor > elevator.targetFloor) {
@@ -215,6 +239,7 @@ export function useElevatorSystem() {
           elevator.currentFloor = elevator.targetFloor;
           elevator.queue.shift();
           const reachedFloor = elevator.currentFloor;
+          console.log(`[UPDATE] Лифт #${elevator.id+1} достиг ${reachedFloor+1}`);
           floorReachedCallbacks.forEach(cb => cb(reachedFloor));
 
           if (elevator.queue.length > 0) {
@@ -222,22 +247,22 @@ export function useElevatorSystem() {
             elevator.isWaiting = true;
             elevator.waitTimeRemaining = WAIT_TIME;
             elevator.isMoving = false;
+            console.log(`[UPDATE] Лифт #${elevator.id+1} ожидает 5с, следующая цель ${elevator.targetFloor+1}`);
           } else {
             elevator.targetFloor = null;
             elevator.isMoving = false;
             elevator.direction = 'idle';
+            console.log(`[UPDATE] Лифт #${elevator.id+1} завершил все поездки`);
           }
         }
       }
     }
   };
 
-  // === Подписка на событие достижения этажа ===
   const onFloorReached = (callback: (floor: number) => void) => {
     floorReachedCallbacks.push(callback);
   };
 
-  // === Запуск/остановка симуляции ===
   const startSimulation = () => {
     if (intervalId) return;
     lastTimestamp = performance.now();
