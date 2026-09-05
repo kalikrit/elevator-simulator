@@ -1,6 +1,84 @@
-# Vue 3 + TypeScript + Vite
+# 🏢 Elevator Simulator
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Симулятор работы 4 лифтов в 25-этажном доме.  
+Реализован на **Vue 3 + Vite + TypeScript**.
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
-# elevator-simulator
+## 📋 Описание
+
+Интерактивный симулятор, в котором пользователь вызывает лифты на разных этажах. Каждый лифт имеет очередь вызовов и обрабатывает их по порядку. Визуализация показывает движение всех лифтов в реальном времени.
+
+## 🛠 Технологии
+
+- Vue 3 (Composition API, `<script setup>`)
+- TypeScript
+- Vite
+- SCSS
+
+## 🚀 Установка и запуск
+
+### 1. Клонирование
+
+```bash
+git clone https://github.com/ТВОЙ_ЮЗЕРНЕЙМ/elevator-simulator.git
+cd elevator-simulator
+```
+
+### 2. Установка зависимостей
+
+```bash
+npm install
+```
+
+### 3. Запуск в режиме разработки
+
+```bash
+npm run dev
+```
+
+Приложение будет доступно по адресу `http://localhost:5173`.
+
+### 4. Сборка для продакшена
+
+```bash
+npm run build
+```
+
+## 🧠 Как пользоваться
+
+- На каждом этаже есть две кнопки: **▲** (вызов лифта вверх) и **▼** (вызов вниз).
+- При нажатии кнопка подсвечивается оранжевым — это означает, что вызов принят.
+- Ближайший свободный лифт (или тот, который едет в том же направлении) будет направлен на этаж.
+- Если все лифты заняты, вызов добавляется в очередь ближайшего лифта.
+- В нижней панели отображается текущая очередь целей для каждого лифта.
+
+## ⚙️ Алгоритм управления
+
+- **Выбор лифта**: для каждого вызова вычисляется предполагаемое время прибытия для каждого лифта (с учётом текущей позиции и очереди). Выбирается лифт с минимальным временем.
+- **Очереди**: каждый лифт хранит очередь этажей, которые должен посетить. После прибытия на этаж цель удаляется из очереди.
+- **Движение**: лифты движутся со скоростью 1 этаж в секунду (60 кадров/сек).
+
+## 📁 Структура проекта
+
+```
+src/
+├── components/
+│   └── ElevatorSimulator.vue   # Основной компонент симулятора
+├── composables/
+│   └── useElevatorSystem.ts    # Логика управления лифтами
+├── types/
+│   └── elevator.ts             # Типы данных (Elevator, Call, Direction)
+├── App.vue                     # Корневой компонент
+└── main.ts                     # Точка входа
+```
+
+## 📸 Скриншоты
+
+*Скриншоты будут добавлены позже.*
+
+## 📝 Лицензия
+
+MIT
+
+## 👤 Автор
+
+[Константин Кононенко] — [https://github.com/kalikrit/elevator-simulator](https://github.com/kalikrit/elevator-simulator)
