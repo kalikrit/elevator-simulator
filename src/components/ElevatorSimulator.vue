@@ -2,13 +2,16 @@
   <div class="building">
     <h1>🏢 Симулятор лифтов</h1>
 
-    <!-- Верхняя панель: статистика -->
+    <!-- Верхняя панель: статистика + кнопка переключения описания -->
     <div class="stats-bar">
       <div class="stat-item">Всего поездок: {{ trips.length }}</div>
       <div class="stat-item">Активных лифтов: {{ activeElevatorsCount }}</div>
+      <button @click="isDescriptionVisible = !isDescriptionVisible" class="toggle-desc-btn" :title="isDescriptionVisible ? 'Скрыть описание' : 'Показать описание'">
+        {{ isDescriptionVisible ? '📕' : '📗' }}
+      </button>
     </div>
 
-    <!-- Панель управления сценариями -->
+    <!-- Панель управления сценариями (без лишней кнопки) -->
     <div class="controls-panel">
       <div class="algorithm-selector">
         <label for="algorithm">Алгоритм:</label>
@@ -31,6 +34,14 @@
       >
         🔄 Сбросить
       </button>
+    </div>
+
+    <!-- Блок описания (сворачиваемый) -->
+    <div v-if="isDescriptionVisible" class="algorithm-description">
+      <span class="algo-name">
+        {{ selectedAlgorithm === 'nearest' ? 'Ближайший доступный' : 'Прогнозирующий по полному времени' }}
+      </span>
+      <span class="algo-desc">{{ algorithmDescription }}</span>
     </div>
 
     <!-- Блок метрик -->
@@ -149,12 +160,20 @@ const getElevatorStatus = (elevator: Elevator): string => {
   return '⏳';
 };
 
-// === Активные вызовы для подсветки кнопок ===
+// === Активные вызовы ===
 const activeCalls = ref<Map<number, boolean>>(new Map());
 
 // === Переменные для метрик и алгоритма ===
 const selectedAlgorithm = ref<'nearest' | 'totalTime'>('nearest');
 const metrics = ref<Metrics | null>(null);
+const isDescriptionVisible = ref(true);
+
+// === Описания алгоритмов ===
+const algorithmDescriptions = {
+  nearest: 'Выбирает ближайший свободный лифт. Оптимален при малой нагрузке, но может быть неэффективен при большом количестве вызовов, так как не учитывает долгосрочные очереди.',
+  totalTime: 'Прогнозирует полное время завершения поездки для каждого лифта (с учётом текущей очереди и остановок) и выбирает минимальное. Снижает среднее время ожидания в пиковые нагрузки.'
+};
+const algorithmDescription = computed(() => algorithmDescriptions[selectedAlgorithm.value]);
 
 // === Подписка на события ===
 onMounted(() => {
@@ -164,21 +183,17 @@ onMounted(() => {
     }
   });
 
-  onCallMade((step: ScenarioStep) => {
-    // не требуется для UI
-  });
-
-  onElevatorArrived((floor: number, elevatorId: number) => {
-    // не требуется для UI
-  });
-
   onScenarioCompleted((receivedMetrics: Metrics) => {
     metrics.value = receivedMetrics;
+    // Показываем описание после завершения сценария
+    isDescriptionVisible.value = true;
   });
 });
 
 const runScenarioB = () => {
   metrics.value = null;
+  // Скрываем описание при запуске
+  isDescriptionVisible.value = false;
   const algorithmName = selectedAlgorithm.value === 'nearest' ? 'Ближайший доступный' : 'Прогнозирующий по полному времени';
   runScenario('scenarioB', algorithmName);
 };
@@ -187,6 +202,7 @@ const resetAll = () => {
   resetElevators();
   metrics.value = null;
   activeCalls.value.clear();
+  isDescriptionVisible.value = true;
 };
 
 const handleCall = (fromFloor: number) => {
@@ -200,7 +216,6 @@ const isCallActive = (floor: number) => {
 </script>
 
 <style scoped lang="scss">
-/* === БАЗОВЫЕ СТИЛИ (полностью сохранены) === */
 * {
   box-sizing: border-box;
 }
@@ -230,7 +245,8 @@ h1 {
 .stats-bar {
   display: flex;
   justify-content: center;
-  gap: 30px;
+  align-items: center;
+  gap: 20px;
   margin-bottom: 8px;
   background: #e2e8f0;
   padding: 6px 16px;
@@ -242,16 +258,27 @@ h1 {
     font-weight: 600;
     color: #2d3748;
   }
+
+  .toggle-desc-btn {
+    border: none;
+    background: transparent;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 4px;
+    transition: transform 0.2s;
+    &:hover {
+      transform: scale(1.2);
+    }
+  }
 }
 
-/* === СТИЛИ УПРАВЛЕНИЯ И МЕТРИК === */
 .controls-panel {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   padding: 8px 12px;
   background: #ffffff;
   border-radius: 8px;
@@ -312,6 +339,30 @@ h1 {
     &:hover:not(:disabled) {
       background: #e2e8f0;
     }
+  }
+}
+
+.algorithm-description {
+  margin: 8px 0 12px 0;
+  padding: 10px 14px;
+  background: #edf2f7;
+  border-left: 4px solid #4299e1;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  text-align: left;
+
+  .algo-name {
+    font-weight: 700;
+    font-size: 15px;
+    color: #2d3748;
+  }
+  .algo-desc {
+    font-size: 14px;
+    color: #4a5568;
+    line-height: 1.4;
   }
 }
 
@@ -379,7 +430,6 @@ h1 {
   }
 }
 
-/* === СТИЛИ ЭТАЖЕЙ === */
 .floors {
   display: flex;
   flex-direction: column-reverse;
