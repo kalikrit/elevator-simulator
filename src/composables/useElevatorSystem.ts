@@ -1,12 +1,27 @@
 // src/composables/useElevatorSystem.ts
 
 import { reactive, onMounted, onUnmounted } from 'vue';
-import type { Elevator, Trip, Direction } from '../types/elevator';
+import type { Elevator, Trip, Direction, Scenario, ScenarioStep, Metrics } from '../types/elevator';
 
 const FLOORS = 25;
 const ELEVATOR_COUNT = 4;
 const SPEED = 1;
 const WAIT_TIME = 5000;
+
+export const SCENARIOS: Record<string, Scenario> = {
+  scenarioB: {
+    id: 'scenarioB',
+    name: 'Конфликт направлений',
+    steps: [
+      { floor: 5, time: 0 },
+      { floor: 20, time: 1 },
+      { floor: 10, time: 2 },
+      { floor: 24, time: 3 },
+      { floor: 8, time: 4 },
+      { floor: 18, time: 5 },
+    ],
+  },
+};
 
 const floorReachedCallbacks: ((floor: number) => void)[] = [];
 
@@ -29,7 +44,37 @@ export function useElevatorSystem() {
   let intervalId: number | null = null;
   let lastTimestamp = performance.now();
 
-  // === Оценка времени до этажа вызова с учётом попутного подбора ===
+  let currentAlgorithm: 'nearest' | 'totalTime' = 'nearest';
+  let activeScenario: Scenario | null = null;
+  let scenarioStartTime: number = 0;
+  let scenarioTimeouts: number[] = [];
+  let isScenarioRunning = false;
+  let callTimes = new Map<number, number>();
+  let waitTimes: number[] = [];
+  let totalDistance = 0;
+  let totalStops = 0;
+  let lastPositions: number[] = [0, 0, 0, 0];
+  let currentAlgorithmName = 'Ближайший доступный';
+
+  const callMadeCallbacks: ((step: ScenarioStep) => void)[] = [];
+  const elevatorArrivedCallbacks: ((floor: number, elevatorId: number) => void)[] = [];
+  const scenarioCompletedCallbacks: ((metrics: Metrics) => void)[] = [];
+
+  const estimateTotalCompletionTime = (elevator: Elevator, from: number, to: number): number => {
+    let current = elevator.currentFloor;
+    let totalTime = 0;
+    for (const target of elevator.queue) {
+      totalTime += Math.abs(current - target);
+      current = target;
+      totalTime += WAIT_TIME / 1000;
+    }
+    totalTime += Math.abs(current - from);
+    current = from;
+    totalTime += WAIT_TIME / 1000;
+    totalTime += Math.abs(current - to);
+    return totalTime;
+  };
+
   const estimatePickupTime = (elevator: Elevator, from: number): { time: number; canPickup: boolean } => {
     if (!elevator.isMoving && elevator.queue.length === 0 && !elevator.isWaiting) {
       return { time: Math.abs(elevator.currentFloor - from), canPickup: false };
@@ -62,7 +107,6 @@ export function useElevatorSystem() {
     return pickup.time + travelFromTo;
   };
 
-  // === Вспомогательная функция для вставки в очередь с логами ===
   const addToQueueSorted = (elevator: Elevator, floor: number) => {
     if (elevator.queue.includes(floor)) {
       console.log(`[QUEUE] Лифт #${elevator.id+1}: этаж ${floor+1} уже есть в очереди`);
@@ -102,40 +146,54 @@ export function useElevatorSystem() {
     }
   };
 
-  // === Запрос поездки ===
   const requestTrip = (fromFloor: number, toFloor: number) => {
+    if (fromFloor >= FLOORS || toFloor >= FLOORS) {
+      console.warn(`[REQUEST] Неверный этаж: from=${fromFloor}, to=${toFloor}, максимальный индекс ${FLOORS-1}`);
+      return;
+    }
+    
     if (fromFloor === toFloor) {
       console.warn('Начальный и конечный этажи совпадают');
       return;
     }
 
-    console.log(`[REQUEST] Вызов с ${fromFloor+1} на ${toFloor+1}`);
+    console.log(`[REQUEST] Вызов с ${fromFloor+1} на ${toFloor+1}, алгоритм: ${currentAlgorithm}`);
 
     let bestElevator: Elevator | null = null;
     let bestTime = Infinity;
     let bestIsPickup = false;
 
-    for (const elevator of elevators) {
-      const pickup = estimatePickupTime(elevator, fromFloor);
-      if (pickup.canPickup) {
-        const totalTime = pickup.time + Math.abs(fromFloor - toFloor) + WAIT_TIME / 1000;
-        if (totalTime < bestTime) {
-          bestTime = totalTime;
-          bestElevator = elevator;
-          bestIsPickup = true;
-        }
-      }
-    }
-
-    if (!bestElevator) {
+    if (currentAlgorithm === 'nearest') {
       for (const elevator of elevators) {
-        const totalTime = estimateTotalTime(elevator, fromFloor, toFloor);
+        const pickup = estimatePickupTime(elevator, fromFloor);
+        if (pickup.canPickup) {
+          const totalTime = pickup.time + Math.abs(fromFloor - toFloor) + WAIT_TIME / 1000;
+          if (totalTime < bestTime) {
+            bestTime = totalTime;
+            bestElevator = elevator;
+            bestIsPickup = true;
+          }
+        }
+      }
+      if (!bestElevator) {
+        for (const elevator of elevators) {
+          const totalTime = estimateTotalTime(elevator, fromFloor, toFloor);
+          if (totalTime < bestTime) {
+            bestTime = totalTime;
+            bestElevator = elevator;
+            bestIsPickup = false;
+          }
+        }
+      }
+    } else {
+      for (const elevator of elevators) {
+        const totalTime = estimateTotalCompletionTime(elevator, fromFloor, toFloor);
         if (totalTime < bestTime) {
           bestTime = totalTime;
           bestElevator = elevator;
-          bestIsPickup = false;
         }
       }
+      bestIsPickup = false;
     }
 
     if (!bestElevator) {
@@ -143,36 +201,30 @@ export function useElevatorSystem() {
       return;
     }
 
-    console.log(`[REQUEST] Выбран лифт #${bestElevator.id+1}, попутный: ${bestIsPickup}`);
+    console.log(`[REQUEST] Выбран лифт #${bestElevator.id+1}`);
 
-    // Добавляем этажи в очередь
     addToQueueSorted(bestElevator, fromFloor);
     addToQueueSorted(bestElevator, toFloor);
 
     console.log(`[QUEUE] Лифт #${bestElevator.id+1} очередь после добавления: ${bestElevator.queue.map(f => f+1).join(' → ')}`);
 
-    // Всегда обновляем первую цель, если она изменилась
     const firstTarget = bestElevator.queue[0];
     if (bestElevator.targetFloor !== firstTarget) {
       bestElevator.targetFloor = firstTarget;
       bestElevator.direction = bestElevator.targetFloor > bestElevator.currentFloor ? 'up' : 'down';
 
-      // Если лифт был в ожидании, прерываем ожидание и запускаем движение
       if (bestElevator.isWaiting) {
         bestElevator.isWaiting = false;
         bestElevator.isMoving = true;
         bestElevator.waitTimeRemaining = 0;
         console.log(`[REQUEST] Лифт #${bestElevator.id+1} прервал ожидание, едет к ${bestElevator.targetFloor+1}`);
       } else if (!bestElevator.isMoving) {
-        // Если стоял, запускаем
         bestElevator.isMoving = true;
         console.log(`[REQUEST] Запущен лифт #${bestElevator.id+1} к ${bestElevator.targetFloor+1}`);
       } else {
-        // Если уже движется, просто меняем цель
         console.log(`[REQUEST] Лифт #${bestElevator.id+1} переключён на ${bestElevator.targetFloor+1}`);
       }
     } else {
-      // Если цель не изменилась, но лифт стоял и не ждал — запускаем
       if (!bestElevator.isMoving && !bestElevator.isWaiting) {
         bestElevator.isMoving = true;
         bestElevator.direction = bestElevator.targetFloor > bestElevator.currentFloor ? 'up' : 'down';
@@ -183,16 +235,20 @@ export function useElevatorSystem() {
     trips.push({ from: fromFloor, to: toFloor, timestamp: Date.now() });
   };
 
-  // === Обновление состояния лифтов (тик) ===
   const updateElevators = (deltaMs: number) => {
     const deltaSeconds = deltaMs / 1000;
 
     for (const elevator of elevators) {
+      // === ОБРАБОТКА ОЖИДАНИЯ ===
       if (elevator.isWaiting) {
         elevator.waitTimeRemaining -= deltaMs;
-        if (elevator.waitTimeRemaining <= 0) {
+        console.log(`[WAIT] Лифт #${elevator.id+1} осталось ждать: ${elevator.waitTimeRemaining}ms`);
+
+        // Принудительный выход, если ждёт слишком долго (защита от зависания)
+        if (elevator.waitTimeRemaining <= 0 || elevator.waitTimeRemaining < -5000) {
           elevator.isWaiting = false;
           elevator.isMoving = true;
+          // Обновляем направление на основе текущей цели
           if (elevator.targetFloor !== null) {
             elevator.direction = elevator.targetFloor > elevator.currentFloor ? 'up' : 'down';
           } else {
@@ -204,6 +260,7 @@ export function useElevatorSystem() {
         continue;
       }
 
+      // === ОСТАЛЬНАЯ ЛОГИКА ДВИЖЕНИЯ ===
       if (elevator.queue.length === 0) {
         if (elevator.currentFloor !== 0) {
           elevator.queue.push(0);
@@ -226,9 +283,10 @@ export function useElevatorSystem() {
         console.log(`[UPDATE] Лифт #${elevator.id+1} новая цель ${elevator.targetFloor+1}`);
       }
 
-      // Движение
+      // Движение вверх
       if (elevator.currentFloor < elevator.targetFloor) {
         elevator.currentFloor += SPEED * deltaSeconds;
+        if (elevator.currentFloor > FLOORS - 1) elevator.currentFloor = FLOORS - 1;
         if (elevator.currentFloor >= elevator.targetFloor) {
           elevator.currentFloor = elevator.targetFloor;
           const removed = elevator.queue.shift();
@@ -238,9 +296,25 @@ export function useElevatorSystem() {
             console.log(`[QUEUE] Лифт #${elevator.id+1}: удалён дубликат ${removed+1} из очереди`);
           }
           console.log(`[QUEUE] Лифт #${elevator.id+1}: удалён ${removed+1} из очереди, осталось: ${elevator.queue.map(f => f+1).join(' → ') || 'пусто'}`);
+
           const reachedFloor = elevator.currentFloor;
           console.log(`[UPDATE] Лифт #${elevator.id+1} достиг ${reachedFloor+1}`);
           floorReachedCallbacks.forEach(cb => cb(reachedFloor));
+
+          if (callTimes.has(reachedFloor)) {
+            const waitTime = performance.now() - callTimes.get(reachedFloor)!;
+            waitTimes.push(waitTime);
+            callTimes.delete(reachedFloor);
+            console.log(`[WAIT] Время ожидания для этажа ${reachedFloor+1}: ${waitTime/1000}с`);
+          }
+
+          const deltaDist = Math.abs(elevator.currentFloor - lastPositions[elevator.id]);
+          totalDistance += deltaDist;
+          lastPositions[elevator.id] = elevator.currentFloor;
+          if (elevator.queue.length > 0) {
+            totalStops++;
+            elevatorArrivedCallbacks.forEach(cb => cb(reachedFloor, elevator.id));
+          }
 
           if (elevator.queue.length > 0) {
             elevator.targetFloor = elevator.queue[0];
@@ -253,10 +327,14 @@ export function useElevatorSystem() {
             elevator.isMoving = false;
             elevator.direction = 'idle';
             console.log(`[UPDATE] Лифт #${elevator.id+1} завершил все поездки`);
+            elevatorArrivedCallbacks.forEach(cb => cb(reachedFloor, elevator.id));
           }
         }
-      } else if (elevator.currentFloor > elevator.targetFloor) {
+      }
+      // Движение вниз
+      else if (elevator.currentFloor > elevator.targetFloor) {
         elevator.currentFloor -= SPEED * deltaSeconds;
+        if (elevator.currentFloor < 0) elevator.currentFloor = 0;
         if (elevator.currentFloor <= elevator.targetFloor) {
           elevator.currentFloor = elevator.targetFloor;
           const removed = elevator.queue.shift();
@@ -266,9 +344,25 @@ export function useElevatorSystem() {
             console.log(`[QUEUE] Лифт #${elevator.id+1}: удалён дубликат ${removed+1} из очереди`);
           }
           console.log(`[QUEUE] Лифт #${elevator.id+1}: удалён ${removed+1} из очереди, осталось: ${elevator.queue.map(f => f+1).join(' → ') || 'пусто'}`);
+
           const reachedFloor = elevator.currentFloor;
           console.log(`[UPDATE] Лифт #${elevator.id+1} достиг ${reachedFloor+1}`);
           floorReachedCallbacks.forEach(cb => cb(reachedFloor));
+
+          if (callTimes.has(reachedFloor)) {
+            const waitTime = performance.now() - callTimes.get(reachedFloor)!;
+            waitTimes.push(waitTime);
+            callTimes.delete(reachedFloor);
+            console.log(`[WAIT] Время ожидания для этажа ${reachedFloor+1}: ${waitTime/1000}с`);
+          }
+
+          const deltaDist = Math.abs(elevator.currentFloor - lastPositions[elevator.id]);
+          totalDistance += deltaDist;
+          lastPositions[elevator.id] = elevator.currentFloor;
+          if (elevator.queue.length > 0) {
+            totalStops++;
+            elevatorArrivedCallbacks.forEach(cb => cb(reachedFloor, elevator.id));
+          }
 
           if (elevator.queue.length > 0) {
             elevator.targetFloor = elevator.queue[0];
@@ -281,6 +375,7 @@ export function useElevatorSystem() {
             elevator.isMoving = false;
             elevator.direction = 'idle';
             console.log(`[UPDATE] Лифт #${elevator.id+1} завершил все поездки`);
+            elevatorArrivedCallbacks.forEach(cb => cb(reachedFloor, elevator.id));
           }
         }
       }
@@ -309,8 +404,139 @@ export function useElevatorSystem() {
     }
   };
 
+  const setAlgorithm = (algo: 'nearest' | 'totalTime') => {
+    currentAlgorithm = algo;
+    currentAlgorithmName = algo === 'nearest' ? 'Ближайший доступный' : 'Прогнозирующий по полному времени';
+    console.log(`[Алгоритм] Установлен: ${currentAlgorithmName}`);
+  };
+
+  const runScenario = (scenarioId: string, algorithmName?: string) => {
+    if (isScenarioRunning) {
+      console.warn('[Сценарий] Уже запущен');
+      return;
+    }
+    const scenario = SCENARIOS[scenarioId];
+    if (!scenario) {
+      console.error('[Сценарий] Не найден:', scenarioId);
+      return;
+    }
+
+    if (algorithmName) {
+      if (algorithmName === 'Ближайший доступный') setAlgorithm('nearest');
+      else if (algorithmName === 'Прогнозирующий по полному времени') setAlgorithm('totalTime');
+    }
+
+    resetElevators();
+    callTimes.clear();
+    waitTimes = [];
+    totalDistance = 0;
+    totalStops = 0;
+    lastPositions = elevators.map(e => e.currentFloor);
+
+    activeScenario = scenario;
+    isScenarioRunning = true;
+    scenarioStartTime = performance.now();
+
+    console.log(`[Сценарий] Запуск "${scenario.name}" (${scenario.steps.length} вызовов), алгоритм: ${currentAlgorithmName}`);
+
+    scenario.steps.forEach((step) => {
+      const delay = step.time * 1000;
+      const timeout = setTimeout(() => {
+        const now = performance.now();
+        callTimes.set(step.floor, now);
+        requestTrip(step.floor, 0);
+        callMadeCallbacks.forEach(cb => cb(step));
+        console.log(`[Сценарий] Вызов на ${step.floor+1} в ${((now - scenarioStartTime)/1000).toFixed(2)}с`);
+      }, delay);
+      scenarioTimeouts.push(timeout);
+    });
+
+    const lastStepTime = scenario.steps[scenario.steps.length - 1].time * 1000 + 15000;
+    const timeout = setTimeout(() => {
+      checkScenarioCompletion();
+    }, lastStepTime);
+    scenarioTimeouts.push(timeout);
+  };
+
+  const resetElevators = () => {
+    scenarioTimeouts.forEach(t => clearTimeout(t));
+    scenarioTimeouts = [];
+    isScenarioRunning = false;
+    activeScenario = null;
+
+    for (const elevator of elevators) {
+      elevator.queue = [];
+      elevator.targetFloor = null;
+      elevator.isMoving = false;
+      elevator.isWaiting = false;
+      elevator.waitTimeRemaining = 0;
+      elevator.currentFloor = 0;
+      elevator.direction = 'idle';
+    }
+    callTimes.clear();
+    waitTimes = [];
+    totalDistance = 0;
+    totalStops = 0;
+    lastPositions = elevators.map(e => e.currentFloor);
+  };
+
+  const checkScenarioCompletion = () => {
+    const allIdle = elevators.every(e => !e.isMoving && e.queue.length === 0 && e.currentFloor === 0);
+    if (allIdle) {
+      finishScenario();
+    } else {
+      setTimeout(checkScenarioCompletion, 1000);
+    }
+  };
+
+  const finishScenario = () => {
+    isScenarioRunning = false;
+    const totalTime = (performance.now() - scenarioStartTime) / 1000;
+    const avgWait = waitTimes.length ? waitTimes.reduce((a,b) => a+b, 0) / waitTimes.length / 1000 : 0;
+    const maxWait = waitTimes.length ? Math.max(...waitTimes) / 1000 : 0;
+
+    const metrics: Metrics = {
+      algorithmName: currentAlgorithmName,
+      totalTime: totalTime,
+      averageWaitTime: avgWait,
+      maxWaitTime: maxWait,
+      totalDistance: totalDistance,
+      totalStops: totalStops,
+      callsCount: waitTimes.length,
+      waitTimes: waitTimes.map(t => t / 1000),
+    };
+
+    console.log('[Сценарий] Завершён! Метрики:', metrics);
+    scenarioCompletedCallbacks.forEach(cb => cb(metrics));
+  };
+
+  const onCallMade = (callback: (step: ScenarioStep) => void) => {
+    callMadeCallbacks.push(callback);
+  };
+
+  const onElevatorArrived = (callback: (floor: number, elevatorId: number) => void) => {
+    elevatorArrivedCallbacks.push(callback);
+  };
+
+  const onScenarioCompleted = (callback: (metrics: Metrics) => void) => {
+    scenarioCompletedCallbacks.push(callback);
+  };
+
   onMounted(startSimulation);
   onUnmounted(stopSimulation);
 
-  return { elevators, trips, requestTrip, onFloorReached };
+  return {
+    elevators,
+    trips,
+    requestTrip,
+    onFloorReached,
+    runScenario,
+    resetElevators,
+    onCallMade,
+    onElevatorArrived,
+    onScenarioCompleted,
+    isScenarioRunning,
+    setAlgorithm,
+    currentAlgorithm,
+  };
 }
